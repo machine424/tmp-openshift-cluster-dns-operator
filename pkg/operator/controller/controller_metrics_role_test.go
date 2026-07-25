@@ -7,20 +7,56 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 )
 
-func TestDNSggMetricsRoleChanged(t *testing.T) {
-	role1 := manifests.MetricsRole()
-	role2 := manifests.MetricsRole()
-	if changed, _ := dnsMetricsRoleChanged(role1, role2); changed {
-		t.Fatal("expected changed to be false for two roles with identical rules")
+func TestDNSMetricsRoleChanged(t *testing.T) {
+	testCases := []struct {
+		description string
+		mutate      func(*rbacv1.Role)
+		expect      bool
+	}{
+		{
+			description: "if nothing changes",
+			mutate:      func(_ *rbacv1.Role) {},
+			expect:      false,
+		},
+		{
+			description: "if a rule is added",
+			mutate: func(role *rbacv1.Role) {
+				role.Rules = append(role.Rules, rbacv1.PolicyRule{
+					APIGroups: []string{"example.io"},
+					Resources: []string{"foos"},
+					Verbs:     []string{"get"},
+				})
+			},
+			expect: true,
+		},
+		{
+			description: "if a rule is removed",
+			mutate: func(role *rbacv1.Role) {
+				role.Rules = role.Rules[1:]
+			},
+			expect: true,
+		},
+		{
+			description: "if an annotation is added",
+			mutate: func(role *rbacv1.Role) {
+				role.Annotations = map[string]string{
+					"test": "test",
+				}
+			},
+			expect: false,
+		},
 	}
-	role2.Rules = append(role2.Rules, rbacv1.PolicyRule{
-		APIGroups: []string{"example.io"},
-		Resources: []string{"foos"},
-		Verbs:     []string{"get"},
-	})
-	if changed, updated := dnsMetricsRoleChanged(role1, role2); !changed {
-		t.Fatal("expected changed to be true after adding a rule")
-	} else if changedAgain, _ := dnsMetricsRoleChanged(role2, updated); changedAgain {
-		t.Fatal("dnsMetricsRoleChanged does not behave as a fixed-point function")
+
+	for _, tc := range testCases {
+		original := manifests.MetricsRole()
+		mutated := original.DeepCopy()
+		tc.mutate(mutated)
+		if changed, updated := dnsMetricsRoleChanged(original, mutated); changed != tc.expect {
+			t.Errorf("%s, expect dnsMetricsRoleChanged to be %t, got %t", tc.description, tc.expect, changed)
+		} else if changed {
+			if changedAgain, _ := dnsMetricsRoleChanged(mutated, updated); changedAgain {
+				t.Errorf("%s, dnsMetricsRoleChanged does not behave as a fixed point function", tc.description)
+			}
+		}
 	}
 }
